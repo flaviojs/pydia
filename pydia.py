@@ -62,6 +62,7 @@ def BASICTYPE_name(value):
     return "BASICTYPE_name({})".format(value)
 def BASICTYPE_str(value, length):
     k = (value, length)
+    if k == (BASICTYPE.btNoType,0): return "..." # vararg argument type
     if k == (BASICTYPE.btVoid,0): return "void" # void type
     if k == (BASICTYPE.btChar,1): return "char" # char WITHOUT signed/unsigned type
     if k == (BASICTYPE.btWChar,2): return "wchar_t" # wide character type
@@ -636,10 +637,18 @@ class FunctionPrinter(SymbolPrinter):
         undecoratedName = symbol.undecoratedName
         if undecoratedName and undecoratedName.find(" " + symbol.name + "(") == -1:
             DEBUG("FunctionPrinter.paramNames", "code was reused, ignoring params={} {}".format(params, " ".join(self.metadata(symbol))))
-            name = self.name(symbol)
-            if undecoratedName.find("::" + name + "(") == -1 and undecoratedName.find(" " + name + "("):
-                #assert False, "not the same function is another class"
+            name = self.name(symbol) # simple name of the function
+            if undecoratedName.find("::" + name + "(") == -1 and undecoratedName.find(" " + name + "(") >= 0:
+                #assert False, "not the same function"
                 return []
+        if undecoratedName and undecoratedName.find("...)") >= 0:
+            # is a vararg function (this argument has no name)
+            if len(params) > 0:
+                # has a list of arguments
+                params += [None]
+            elif len(params) == 0 and undecoratedName.find("(...)") >= 0:
+                # all ok, it's not missing arguments
+                params += [None]
         return params
 
     def declareMemberLine(self, symbol):
