@@ -689,16 +689,28 @@ class DataPrinter(SymbolPrinter):
 
     def declareMemberLine(self, symbol):
         self.validate(symbol)
-        assert symbol.dataKind == DATAKIND.DataIsMember
-        assert symbol.locationType == LOCATIONTYPE.LocIsThisRel
         s = []
-        s.append("/* this+{} */".format(symbol.offset))#hexValue(symbol.offset, 4)))
-        s.append(CVACCESS_str(symbol.access) + ":")
-        s.append(TypePrinter(self, name=self.name(symbol)).declare(symbol.type) + ";")
-        s.append("//")
-        s += self.metadata(symbol)
-        s.append("//")
-        s += TypePrinter(self).metadata(symbol.type)
+        if symbol.dataKind == DATAKIND.DataIsMember and symbol.locationType == LOCATIONTYPE.LocIsThisRel:
+            # normal member
+            s.append("/* this+{} */".format(symbol.offset))#hexValue(symbol.offset, 4)))
+            s.append(CVACCESS_str(symbol.access) + ":")
+            s.append(TypePrinter(self, name=self.name(symbol)).declare(symbol.type) + ";")
+            s.append("//")
+            s += self.metadata(symbol)
+            s.append("//")
+            s += TypePrinter(self).metadata(symbol.type)
+        elif symbol.dataKind == DATAKIND.DataIsStaticMember and symbol.locationType == LOCATIONTYPE.LocIsStatic:
+            # static member
+            s.append(CVACCESS_str(symbol.access) + ":")
+            s.append("static")
+            s.append(TypePrinter(self, name=self.name(symbol)).declare(symbol.type) + ";")
+            s.append("//")
+            s += self.metadata(symbol)
+            s.append("//")
+            s += TypePrinter(self).metadata(symbol.type)
+        else:
+            SymbolPrinter(self).debugSymbol(symbol)
+            assert False, "TODO (DATAKIND." + DATAKIND_name(symbol.dataKind) + ",LOCATIONTYPE." + LOCATIONTYPE_name(symbol.locationType) + ")"
         return " ".join(s)
 
 
