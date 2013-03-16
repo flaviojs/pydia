@@ -156,6 +156,7 @@ def CVCALL_name(value):
             return name
     return "CVCALL_name({})".format(value)
 def CVCALL_str(value):
+    if value == CVCALL.CV_CALL_NEAR_C: return "__cdecl"
     if value == CVCALL.CV_CALL_NEAR_STD: return "__stdcall"
     if value == CVCALL.CV_CALL_THISCALL: return "__thiscall"
     return "CVCALL_str({})".format(value)
@@ -565,13 +566,16 @@ class TypePrinter(SymbolPrinter):
         showThiscall = self.option("showThiscall")
         isConstFunction = symbol.objectPointerType and symbol.objectPointerType.type.constType
         s = []
+        warning = None
         if showReturn:
             s.append(TypePrinter(self).declare(symbol.type))
         if showThiscall or symbol.callingConvention != CVCALL.CV_CALL_THISCALL:
             s.append(CVCALL_str(symbol.callingConvention))
         params = self.params(symbol)
         if len(paramNames) != len(params):
-            if len(paramNames) != 0: assert False, "len({}) != {})".format(paramNames, len(params))
+            if len(paramNames) != 0:
+                warning = "/* <WARNING : param names removed because len({}) != {}> */".format(paramNames, len(params))
+                #assert False, "len({}) != {})".format(paramNames, len(params))
             paramNames = [None] * len(params) # names are not available
         params = [TypePrinter(self, name=paramNames[i]).declare(params[i].type) for i in xrange(len(params))]
         if len(params) == 0: params.append("void") # no paramenters
@@ -579,6 +583,8 @@ class TypePrinter(SymbolPrinter):
         s.append(name + "(" + ", ".join(params) + ")")
         if isConstFunction:
             s.append("const")
+        if warning:
+            s.append(warning)
         return " ".join(s)
 
     def declareFunctionPointer(self, symbol):
