@@ -1756,8 +1756,8 @@ class DiaEnumData(DiaSymbol): # done
         self.value = symbol.value
 
     def define(self, prefix="", suffix=",", hexvalue=True):
-        assert isinstance(prefix, str)
-        assert isinstance(suffix, str)
+        assert isinstance(prefix, basestring)
+        assert isinstance(suffix, basestring)
         assert hexvalue in (True, False)
         if hexvalue:
             value = "0x%X" % (self.value&0xFFFFFFFF)
@@ -1928,7 +1928,7 @@ class PyDia:
     prefix = []
 
     def __init__(self, targetFilepath):
-        assert isinstance(targetFilepath, str)
+        assert isinstance(targetFilepath, basestring)
         self.targetFilepath = targetFilepath
 
         DEBUG("PyDia","__enter__")
@@ -1938,12 +1938,15 @@ class PyDia:
         self.dataSource = CreateObject(self.msdia.DiaSource, interface=self.msdia.IDiaDataSource)
         DEBUG("DataSource", self.dataSource)
 
-        if self.targetFilepath.lower().endswith(".exe"):
-            self.dataSource.loadDataForExe(self.targetFilepath, self.searchPath, None)
-        elif self.targetFilepath.lower().endswith(".pdb"):
+        ext = self.targetFilepath
+        if len(ext) > 4:
+            ext = ext[-4:].lower()
+        if ext == ".pdb":
             self.dataSource.loadDataFromPdb(self.targetFilepath)
+        elif ext in (".exe",".dll"):
+            self.dataSource.loadDataForExe(self.targetFilepath, self.searchPath, None)
         else:
-            raise Error("Unknown file extension [{}]".format(self.targetFilepath))
+            raise ValueError("Unknown file extension [{}]".format(self.targetFilepath))
         self.session = self.dataSource.openSession()
         DEBUG("Session", self.session)
         
@@ -1965,6 +1968,9 @@ class PyDia:
     def pop(self):
         """Remove the last section of the prefix."""
         del self.prefix[-1]
+
+    def symbolById(self, id):
+        return self.session.symbolById(id)
 
     def findChildrenEx(self, symbol=None):
         """Return an iterator for all the children."""
