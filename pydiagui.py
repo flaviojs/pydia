@@ -200,14 +200,15 @@ class PyDiaGUI(wx.Frame):
         symbol = self.session.globalScope
         symIndexId = symbol.symIndexId
 
-        tree = self.mgr.GetPane("symboltree").Show().window
-        root = tree.AddRoot("{} - {}".format(symIndexId, path), self.TREE_ART_ROOT_SYMBOL)
-        tree.SetItemHasChildren(root, True)
-
         paneinfo = aui.AuiPaneInfo().Name("symbol_{}".format(symIndexId)).Caption("Symbol #{}".format(symIndexId))
         paneinfo.Center().CloseButton(True).MaximizeButton(True).MinimizeButton(True).Show()
         pane = PyDiaSymbolPanel(self, session, symbol, self.log)
         self.mgr.AddPane(pane, paneinfo)
+
+        tree = self.mgr.GetPane("symboltree").Show().window
+        root = tree.AddRoot("{} - {}".format(symIndexId, path), self.TREE_ART_ROOT_SYMBOL)
+        tree.SetPyData(root, pane)
+        tree.SetItemHasChildren(root, True)
 
         self.mgr.Update()
         self.GetMenuBar().FindItemById(wx.ID_CLOSE).Enable(True)
@@ -217,13 +218,21 @@ class PyDiaGUI(wx.Frame):
         self.session = None
         
         tree = self.mgr.GetPane("symboltree").Hide().window
+
+        def removePanes(self, tree, item):
+            if not item.IsOk():
+                return
+            pane = tree.GetPyData(item)
+            if pane:
+                pane.Hide()
+                self.mgr.DetachPane(pane)
+                self.RemoveChild(pane)
+            item, cookie = tree.GetFirstChild(item)
+            while item.IsOk():
+                removePanes(self, tree, item)
+                item = tree.GetNextChild(item, cookie)
+        removePanes(self, tree, tree.GetRootItem())
         tree.DeleteAllItems()
-        
-        panes = [pane.window for pane in self.mgr.GetAllPanes() if pane.name.startswith("symbol_")]
-        for pane in panes:
-            pane.Hide()
-            self.mgr.DetachPane(pane)
-            self.RemoveChild(pane)
             
         self.mgr.Update()
         self.GetMenuBar().FindItemById(wx.ID_CLOSE).Enable(False)
