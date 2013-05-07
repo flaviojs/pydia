@@ -1,29 +1,19 @@
 
 
-import sys, os, traceback, thread
+import sys, os, traceback
 import wx
-from wx.lib.scrolledpanel import ScrolledPanel
-from pydia import *
+import wx.py.crust
+import pydia
 
-ID_ABOUT = wx.NewId()
-ID_EXIT  = wx.NewId()
-ID_RUNCODE = wx.NewId()
-
-FRAMETB = False
-TBFLAGS = ( wx.TB_HORIZONTAL
-            | wx.NO_BORDER
-            | wx.TB_FLAT
-            #| wx.TB_TEXT
-            #| wx.TB_HORZ_LAYOUT
-            )
+try:
+    from agw import aui
+except ImportError: # if it's not there locally, try the wxPython lib.
+    import wx.lib.agw.aui as aui
 
 assertMode = wx.PYAPP_ASSERT_DIALOG
-workThreadLock = threading.RLock() # only one worker at a time
 
 class Log:
     def WriteText(self, text):
-        print text
-        return
         if text[-1:] == '\n':
             text = text[:-1]
         wx.LogMessage(text)
@@ -32,177 +22,23 @@ class Log:
 #---------------------------------------------------------------------------
 
 
-class RedirectStdOutToTextCtrl(object):
-    """
-    Redirects stdout and appends it to a TextCtrl.
-    To be used in the 'with' statement.
-    Assumes the worker thread can produce output faster than the GUI can handle.
-    """
-    def __init__(self, textctrl):
-        self.textctrl = textctrl
-        self.output = []
-        self.lock = threading.Lock()
+class PyDiaSymbolPanel(wx.Panel):
+    def __init__(self, parent, session, symbol, log):
+        wx.Panel.__init__(self, parent)
 
-    def __enter__(self):
-        self.old_stdout = sys.stdout
-        sys.stdout = self
+        assert session
+        assert symbol
+        self.log = Log()
+        self.symIndexId = symbol.symIndexId
+        
+        self.label = wx.StaticText(self, -1, label = "Metadata:")
+        metadata = pydia.SymbolPrinter(session).metadata(symbol)
+        self.text = wx.TextCtrl(self, -1, value = '\n'.join(metadata), style = wx.TE_MULTILINE | wx.TE_READONLY)
 
-    def __exit__(self, type, value, traceback):
-        sys.stdout = self.old_stdout
-
-    def write(self, s):
-        """called in the worker thread"""
-        with self.lock:
-            if len(self.output) == 0:
-                wx.CallAfter(self.updateTextCtrl)
-            self.output.append(s)
-
-    def updateTextCtrl(self):
-        """called in the GUI thread"""
-        with self.lock:
-            self.textctrl.AppendText(''.join(self.output))
-            del self.output[:]
-
-
-class PyDiaSymbolPage(wx.Panel):
-    """Page of particular DIA symbol"""
-    def __init__(self, tree, symIndexId, log):
-        wx.Panel.__init__(self, tree, -1)
-
-        self.tree = tree
-        self.symIndexId = symIndexId
-        self.log = log
-
-        # widgets
-        self.meta_label = wx.StaticText(self, -1, "Metadata:")
-        self.meta_text = wx.TextCtrl(self, -1, style = wx.TE_MULTILINE | wx.TE_READONLY)
-        self.run_label1 = wx.StaticText(self, -1, "Python code:")
-        self.run_input = wx.TextCtrl(self, -1, style = wx.TE_MULTILINE)
-        self.run_button = wx.Button(self, ID_RUNCODE, "Run code (TODO)")
-        self.run_label2 = wx.StaticText(self, -1, "Output:")
-        self.run_output = wx.TextCtrl(self, -1, style = wx.TE_AUTO_SCROLL | wx.TE_MULTILINE | wx.TE_READONLY)
-
-        # sizer
         sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(self.meta_label)
-        sizer.Add(self.meta_text, flag = wx.EXPAND)
-        sizer.AddSpacer(10)
-        sizer.Add(self.run_label1)
-        sizer.Add(self.run_input, flag = wx.EXPAND)
-        sizer.Add(self.run_button)
-        sizer.Add(self.run_label2)
-        sizer.Add(self.run_output, flag = wx.EXPAND)
+        sizer.Add(self.label, 0)
+        sizer.Add(self.text, 0, wx.EXPAND)
         self.SetSizer(sizer)
-
-        # events
-        self.Bind(wx.EVT_BUTTON, self.OnRunCode, id = ID_RUNCODE)
-
-        self.loadMetadata()
-
-    def pydia(self):
-        return self.tree.pydia
-
-    def symbol(self):
-        return self.tree.pydia.symbolById(self.symIndexId)
-
-    def loadMetadata(self):
-        try:
-            pydia = self.pydia()
-            assert pydia
-            symbol = self.symbol()
-            assert symbol
-            metadata = SymbolPrinter(pydia).metadata(symbol)
-            self.meta_text.AppendText('\n'.join(metadata))
-        except:
-            self.meta_text.AppendText(traceback.format_exc())
-
-    def OnRunCode(self, evt):
-        self.run_output.Clear()
-        self.run_button.Enable(False)
-        self._run_button_label = self.run_button.GetLabel()
-        self.run_button.SetLabel("Running...")
-        thread.start_new_thread(self.runScript, (self.run_input.GetValue(),))
-        sys.stderr.write('OnRunCode END\n')
-
-    def runScript(self, code):
-        """called in a worker thread"""
-        exc = None
-        with workThreadLock:
-            try:
-                with RedirectStdOutToTextCtrl(self.run_output):
-                    exec(code, globals(), {'self': self})
-            except:
-                exc = traceback.format_exc()
-        wx.CallAfter(self.endScript, exc)
-
-    def endScript(self, exc):
-        """called in the GUI thread"""
-        if exc:
-            self.run_output.AppendText(exc)
-        self.run_button.Enable(True)
-        self.run_button.SetLabel(self._run_button_label)
-        del self._run_button_label
-
-
-class PyDiaSymbolTree(wx.Treebook):
-    """Treebook of DIA symbols"""
-    def __init__(self, parent, id, log):
-        wx.Treebook.__init__(self, parent, id, style=
-                             wx.BK_DEFAULT
-                             #wx.BK_TOP
-                             #wx.BK_BOTTOM
-                             #wx.BK_LEFT
-                             #wx.BK_RIGHT
-                            )
-        self.log = log
-        self.pydia = None
-        
-        self.Bind(wx.EVT_WINDOW_DESTROY, self.OnDestroy)
-        self.Bind(wx.EVT_TREEBOOK_PAGE_CHANGED, self.OnPageChanged)
-        self.Bind(wx.EVT_TREEBOOK_PAGE_CHANGING, self.OnPageChanging)
-
-        # This is a workaround for a sizing bug on Mac...
-        wx.FutureCall(100, self.AdjustSize)
-
-    def OnDestroy(self, event):
-        self.Unload()
-        
-    def AdjustSize(self):
-        #print self.GetTreeCtrl().GetBestSize()
-        self.GetTreeCtrl().InvalidateBestSize()
-        self.SendSizeEvent()
-        #print self.GetTreeCtrl().GetBestSize()
-        
-
-    def makeSymbolPage(self, color):
-        p = wx.Panel(self, -1)
-        return p
-
-    def OnPageChanged(self, event):
-        old = event.GetOldSelection()
-        new = event.GetSelection()
-        sel = self.GetSelection()
-        self.log.write('OnPageChanged,  old:%d, new:%d, sel:%d\n' % (old, new, sel))
-        event.Skip()
-
-    def OnPageChanging(self, event):
-        old = event.GetOldSelection()
-        new = event.GetSelection()
-        sel = self.GetSelection()
-        self.log.write('OnPageChanging, old:%d, new:%d, sel:%d\n' % (old, new, sel))
-        event.Skip()
-
-    def Unload(self):
-        self.DeleteAllPages() # XXX we only support 1 for now
-        if hasattr(self, 'pydia'):
-            del self.pydia
-            
-    def Load(self, path):
-        self.Unload()
-        self.pydia = PyDia(path)
-        win = PyDiaSymbolPage(self, self.pydia.globalScope.symIndexId, self.log)
-        self.AddPage(win, SYMTAG_name(self.pydia.globalScope.symTag))
-        
 
 
 class PyDiaGUI(wx.Frame):
@@ -215,53 +51,49 @@ class PyDiaGUI(wx.Frame):
                "Dynamic-link library (*.dll)|*.dll|" \
                "All files (*.*)|*.*"
 
-    def __init__(self, parent = None, id = -1, title = "PyDiaGUI", *args, **kwargs):
+    def __init__(self, parent = None, id = wx.ID_ANY, title = "PyDiaGUI", *args, **kwargs):
         super(PyDiaGUI, self).__init__(parent, id, title, *args, **kwargs)
 
-        self.basetitle = self.GetTitle()
-        self.log = Log()
-        self.CreateGUI()
+        self.mgr = aui.AuiManager()
 
+        # tell AuiManager to manage this frame
+        self.mgr.SetManagedWindow(self)
+        
+        self.original_title = self.GetTitle()
+        self.log = Log()
+        self.session = None # PyDia
+
+        self.SetSize(wx.Size(800, 600))
+        self.SetMinSize(wx.Size(400, 300))
         self.Centre()
         self.Show(True)
-
-    def CreateGUI(self):
-        self.SetSize((600, 400))
         
         # status bar
-        self.CreateStatusBar()
-
-        # menu bar
-        #filemenu = wx.Menu()
-        #filemenu.Append(ID_ABOUT, "&About", "Information about this program")
-        #filemenu.AppendSeparator()
-        #filemenu.Append(ID_EXIT, "E&xit", "Terminate the program")
-        #menubar = wx.MenuBar()
-        #menubar.Append(filemenu, "&File")
-        #self.SetMenuBar(menubar)
-        #wx.EVT_MENU(self, ID_ABOUT, self.OnAbout)
-        #wx.EVT_MENU(self, ID_EXIT, self.OnExit)
+        self.statusbar = self.CreateStatusBar()
 
         # tool bar
-        self.toolbar = self.CreateToolBar()
-        topen = self.toolbar.AddLabelTool(wx.ID_OPEN, '', wx.ArtProvider.GetBitmap(wx.ART_FILE_OPEN, wx.ART_TOOLBAR),
-                                          shortHelp = "Open file", longHelp = "Open a pdb/exe/dll file and start exploring it's debug symbols.")
-        self.toolbar.Realize()
+        ## TODO
+        
+        #print "menubar"
+        self.MakeMenuBar()
+        #print "shell"
+        self.MakeShellPane()
+        #print "symboltree"
+        self.MakeSymbolTreePane()
+        #print "events"
+        self.BindEvents()
 
-        self.Bind(wx.EVT_TOOL, self.OnOpen, topen)
-
-        self.symboltree = PyDiaSymbolTree(self, wx.ID_ANY, self.log)
+        self.mgr.Update()
+        self.statusbar.SetStatusText("Ready")
+        #print "done"
 
     def OnOpen(self,event):
-        self.log.write("OnOpen")
-        
-        # Dialog to open a single file.
         dlg = wx.FileDialog(
-            self, message="Choose a file",
-            defaultDir=os.getcwd(), 
-            defaultFile="",
-            wildcard=self.wildcard,
-            style=wx.OPEN | wx.CHANGE_DIR #| wx.MULTIPLE 
+            self, message = "Choose a file",
+            defaultDir = os.getcwd(), 
+            defaultFile = "",
+            wildcard = self.wildcard,
+            style = wx.OPEN | wx.CHANGE_DIR #| wx.MULTIPLE
             )
         if dlg.ShowModal() == wx.ID_OK:
             paths = dlg.GetPaths()
@@ -269,7 +101,9 @@ class PyDiaGUI(wx.Frame):
 
             for path in paths:
                 try:
-                    self.symboltree.Load(path)
+                    self.statusbar.PushStatusText("Loading {}...".format(path))
+                    self.OpenSession(path)
+                    self.statusbar.PopStatusText()
                 except Exception as e:
                     desc = traceback.format_exc()
                     self.log.write(desc)
@@ -281,19 +115,118 @@ class PyDiaGUI(wx.Frame):
                     dlg.Destroy()
                     break
         dlg.Destroy()
-        pass
+        self.statusbar.SetStatusText("Ready")
 
-    def OnAbout(self,event):
-        """show about information"""
-        d = wx.MessageDialog( self, " A sample editor \n in wxPython "
-                              ,"About Sample Editor", wx.OK)
+    def OnClose(self, evt):
+        self.CloseSession()
+
+    def OnAbout(self, evt):
+        msg = ["This is a graphical user interface to PyDia, a collection of classes to explore debug symbols from MSDIA in python.\n",
+               "MSDIA is the Microsoft Debug Interface Access Software Development Kit that comes with Visual Studio.\n",
+               "\n",
+               "Author:\n",
+               "  Flávio J. Saraiva <flaviojs2005@gmail.com>\n",
+               "\n"
+               "Please report any bugs or requests of improvements to:\n",
+               "  https://github.com/flaviojs/pydia\n",
+               "\n",
+               "Using:\n",
+               "  Python ", sys.version, "\n",
+               "  wxPython ", wx.VERSION_STRING, "\n",
+               ]
+        msg = ''.join(msg)
+        d = wx.MessageDialog(self, msg, "About", wx.OK)
         d.ShowModal()
         d.Destroy()
 
-    def OnExit(self,event):
+    def OnExit(self, event):
         """close the frame"""
         self.Close(True)
 
+    def MakeMenuBar(self):
+        filemenu = wx.Menu()
+        filemenu.Append(wx.ID_OPEN, "&Open...", "Open existing pdb/exe/dll file")
+        filemenu.Append(wx.ID_CLOSE, "Close", "Close the active file")
+        filemenu.Enable(wx.ID_CLOSE, False)
+        filemenu.AppendSeparator()
+        filemenu.Append(wx.ID_EXIT, "E&xit", "Terminate the program")
+
+        helpmenu = wx.Menu()
+        helpmenu.Append(wx.ID_ABOUT, "&About...", "Display program information")
+        
+        menubar = wx.MenuBar()
+        menubar.Append(filemenu, "&File")
+        menubar.Append(helpmenu, "&Help")
+        self.SetMenuBar(menubar)
+
+    def MakeShellPane(self):
+        return ## TODO figure out why it's hanging the app sometimes during load
+        paneinfo = aui.AuiPaneInfo().Name("shell").Caption("Python Shell")
+        paneinfo.Center().CloseButton(False).MaximizeButton(True).MinimizeButton(True).Hide()
+
+        intro = 'Welcome To PyCrust %s' % wx.py.version.VERSION
+        shell = wx.py.crust.Crust(self, intro = intro)
+        #shell = wx.py.shell.Shell(self, intro = intro)
+        self.mgr.AddPane(shell, paneinfo)
+
+    def MakeSymbolTreePane(self):
+        paneinfo = aui.AuiPaneInfo().Name("symboltree").Caption("Symbol Tree")
+        paneinfo.Bottom().CloseButton(False).MaximizeButton(True).MinimizeButton(True).Hide()
+        
+        imglist = wx.ImageList(16, 16, initialCount = 3)
+        imglist.Add(wx.ArtProvider.GetBitmap(wx.ART_EXECUTABLE_FILE, wx.ART_OTHER, wx.Size(16, 16)))
+        imglist.Add(wx.ArtProvider.GetBitmap(wx.ART_NORMAL_FILE, wx.ART_OTHER, wx.Size(16, 16)))
+        imglist.Add(wx.ArtProvider.GetBitmap(wx.ART_FIND, wx.ART_OTHER, wx.Size(16, 16)))
+        self.TREE_ART_ROOT_SYMBOL       = 0 # root symbol, SymTagExe
+        self.TREE_ART_ATTRIBUTE_SYMBOL  = 1 # attribute symbol
+        self.TREE_ART_CHILD_SYMBOL      = 1 # child symbol
+        self.TREE_ART_SEARCH_FILTER     = 2 # search filter
+
+        tree = wx.TreeCtrl(self)
+        tree.AssignImageList(imglist)
+        self.mgr.AddPane(tree, paneinfo)
+
+    def BindEvents(self):
+        wx.EVT_MENU(self, wx.ID_OPEN, self.OnOpen)
+        wx.EVT_MENU(self, wx.ID_CLOSE, self.OnClose)
+        wx.EVT_MENU(self, wx.ID_EXIT, self.OnExit)
+        wx.EVT_MENU(self, wx.ID_ABOUT, self.OnAbout)
+
+    def OpenSession(self, path):
+        session = pydia.PyDia(path)
+        self.CloseSession()
+        self.session = session
+
+        symbol = self.session.globalScope
+        symIndexId = symbol.symIndexId
+
+        tree = self.mgr.GetPane("symboltree").Show().window
+        root = tree.AddRoot("{} - {}".format(symIndexId, path), self.TREE_ART_ROOT_SYMBOL)
+        tree.SetItemHasChildren(root, True)
+
+        paneinfo = aui.AuiPaneInfo().Name("symbol_{}".format(symIndexId)).Caption("Symbol #{}".format(symIndexId))
+        paneinfo.Center().CloseButton(True).MaximizeButton(True).MinimizeButton(True).Show()
+        pane = PyDiaSymbolPanel(self, session, symbol, self.log)
+        self.mgr.AddPane(pane, paneinfo)
+
+        self.mgr.Update()
+        self.GetMenuBar().FindItemById(wx.ID_CLOSE).Enable(True)
+
+    def CloseSession(self):
+        del self.session
+        self.session = None
+        
+        tree = self.mgr.GetPane("symboltree").Hide().window
+        tree.DeleteAllItems()
+        
+        panes = [pane.window for pane in self.mgr.GetAllPanes() if pane.name.startswith("symbol_")]
+        for pane in panes:
+            pane.Hide()
+            self.mgr.DetachPane(pane)
+            self.RemoveChild(pane)
+            
+        self.mgr.Update()
+        self.GetMenuBar().FindItemById(wx.ID_CLOSE).Enable(False)
 
 def main():
     app = wx.PySimpleApp()
