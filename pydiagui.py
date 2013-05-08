@@ -3,6 +3,7 @@
 import sys, os, traceback
 import wx
 import wx.py.crust
+import wx.html
 import pydia
 
 try:
@@ -22,7 +23,7 @@ class Log:
 #---------------------------------------------------------------------------
 
 
-class PyDiaSymbolPanel(wx.Panel):
+class SymbolPanel(wx.Panel):
     def __init__(self, parent, session, symbol, log):
         wx.Panel.__init__(self, parent)
 
@@ -39,6 +40,18 @@ class PyDiaSymbolPanel(wx.Panel):
         sizer.Add(self.label, 0)
         sizer.Add(self.text, 0, wx.EXPAND)
         self.SetSizer(sizer)
+
+
+class SymbolData(object):
+    def __init__(self, session, symbol):
+        assert session
+        assert symbol
+        self.session = session
+        self.symbol = symbol
+
+    def __del__(self):
+        del self.symbol
+        del self.session
 
 
 class PyDiaGUI(wx.Frame):
@@ -62,6 +75,7 @@ class PyDiaGUI(wx.Frame):
         self.original_title = self.GetTitle()
         self.log = Log()
         self.session = None # PyDia
+        self.sessionPages = []
 
         self.SetSize(wx.Size(800, 600))
         self.SetMinSize(wx.Size(400, 300))
@@ -71,21 +85,26 @@ class PyDiaGUI(wx.Frame):
         # status bar
         self.statusbar = self.CreateStatusBar()
 
-        # tool bar
-        ## TODO
-        
-        #print "menubar"
-        self.MakeMenuBar()
-        #print "shell"
-        self.MakeShellPane()
-        #print "symboltree"
-        self.MakeSymbolTreePane()
-        #print "events"
-        self.BindEvents()
+        try:
+            #print "menubar"
+            self.MakeMenuBar()
+            #print "toolbar"
+            self.MakeToolBar()
+            #print "shell"
+            self.MakeShellPane()
+            #print "symboltree"
+            self.MakeSymbolTreePane()
+            #print "symbolbook"
+            self.MakeSymbolBook()
+            #print "events"
+            self.BindEvents()
 
-        self.mgr.Update()
-        self.statusbar.SetStatusText("Ready")
-        #print "done"
+            self.AddWelcomePage()
+            self.statusbar.SetStatusText("Ready")
+            self.DoUpdate()
+            #print "done"
+        except:
+            self.ShowExceptionInDialog()
 
     def OnOpen(self,event):
         dlg = wx.FileDialog(
@@ -100,29 +119,28 @@ class PyDiaGUI(wx.Frame):
             assert len(paths) == 1 # XXX we only support 1 for now
 
             for path in paths:
+                self.statusbar.PushStatusText("Loading {}...".format(path))
                 try:
-                    self.statusbar.PushStatusText("Loading {}...".format(path))
                     self.OpenSession(path)
-                    self.statusbar.PopStatusText()
-                except Exception as e:
-                    desc = traceback.format_exc()
-                    self.log.write(desc)
-                    dlg = wx.MessageDialog(self, 'Failed to load {}\n\n{}'.format(path, desc),
-                               'Error:',
-                                wx.OK | wx.ICON_ERROR
-                                )
-                    dlg.ShowModal()
-                    dlg.Destroy()
-                    break
+                except:
+                    self.ShowExceptionInDialog()
+                self.statusbar.PopStatusText()
         dlg.Destroy()
         self.statusbar.SetStatusText("Ready")
 
     def OnClose(self, evt):
         self.CloseSession()
+        self.DoUpdate()
+
+    def OnExit(self, event):
+        self.CloseSession()
+        self.Close(True)
+
+    def OnHelp(self, event):
+        self.AddWelcomePage()
 
     def OnAbout(self, evt):
-        msg = ["This is a graphical user interface to PyDia, a collection of classes to explore debug symbols from MSDIA in python.\n",
-               "MSDIA is the Microsoft Debug Interface Access Software Development Kit that comes with Visual Studio.\n",
+        msg = ["Read the welcome page for more info.\n",
                "\n",
                "Author:\n",
                "  Flávio J. Saraiva <flaviojs2005@gmail.com>\n",
@@ -139,10 +157,59 @@ class PyDiaGUI(wx.Frame):
         d.ShowModal()
         d.Destroy()
 
-    def OnExit(self, event):
-        """close the frame"""
-        self.Close(True)
+    def OnNotebookPageClose(self, event):
+        book = self.mgr.GetPane("book").window
+        page = book.GetPage(event.selection)
+        try:
+            self.sessionPages.remove(pane)
+            pane.Hide()
+            self.DoUpdate()
+        except:
+            pass
 
+    def OnTreeItemExpanding(self, event):
+        tree = self.mgr.GetPane("symboltree").window
+        item = event.GetItem()
+        if item and item.IsOk() and tree.ItemHasChildren(item) and tree.GetChildrenCount(item, False) == 0:
+            # attribute symbols
+            data = tree.GetPyData(item)
+            for attr in pydia.SymbolPrinter(data.session).attributes(data.symbol):
+                try:
+                    symbol = getattr(data.symbol, attr)
+                    if symbol and type(symbol) == type(data.symbol):
+                        title = "{} - {} = {} {}".format(
+                            symbol.symIndexId, attr,
+                            pydia.SYMTAG_name(symbol.symTag), symbol.name)
+                        image = self.TREE_ART_ATTRIBUTE_SYMBOL
+                        data = SymbolData(data.session, symbol)
+                        child = tree.AppendItem(item, title, image)
+                        tree.SetPyData(child, data)
+                        tree.SetItemHasChildren(child, True)
+                except:
+                    pass
+            # search filter
+            title = "Find children..."
+            image = self.TREE_ART_SEARCH_FILTER
+            tree.AppendItem(item, title, image)
+            #print "OnTreeItemExpanding: children added"
+
+    def OnTreeItemActivate(self, event):
+        tree = self.mgr.GetPane("symboltree").window
+        item = event.GetItem()
+        if item and item.IsOk():
+            image = tree.GetItemImage(item)
+            data = tree.GetPyData(item)
+            if image == self.TREE_ART_SEARCH_FILTER:
+                # search for children
+                print "TODO search filter"
+            elif data: # symbol
+                self.AddSymbolPage(data, tree.GetImageList().GetBitmap(image))
+                self.DoUpdate()
+
+    def DoUpdate(self):
+        self.mgr.Update()
+        self.Refresh()
+        
     def MakeMenuBar(self):
         filemenu = wx.Menu()
         filemenu.Append(wx.ID_OPEN, "&Open...", "Open existing pdb/exe/dll file")
@@ -152,12 +219,16 @@ class PyDiaGUI(wx.Frame):
         filemenu.Append(wx.ID_EXIT, "E&xit", "Terminate the program")
 
         helpmenu = wx.Menu()
+        helpmenu.Append(wx.ID_HELP, "Welcome page", "Open welcome page")
         helpmenu.Append(wx.ID_ABOUT, "&About...", "Display program information")
         
         menubar = wx.MenuBar()
         menubar.Append(filemenu, "&File")
         menubar.Append(helpmenu, "&Help")
         self.SetMenuBar(menubar)
+
+    def MakeToolBar(self):
+        pass
 
     def MakeShellPane(self):
         return ## TODO figure out why it's hanging the app sometimes during load
@@ -169,18 +240,40 @@ class PyDiaGUI(wx.Frame):
         #shell = wx.py.shell.Shell(self, intro = intro)
         self.mgr.AddPane(shell, paneinfo)
 
+    def MakeSymbolBook(self):
+        paneinfo = aui.AuiPaneInfo().Name("book").CenterPane().PaneBorder(False)
+        ctrl = aui.AuiNotebook(self, agwStyle = aui.AUI_NB_DEFAULT_STYLE | aui.AUI_NB_TAB_EXTERNAL_MOVE | wx.NO_BORDER)
+        self.mgr.AddPane(ctrl, paneinfo)
+
+    def AddWelcomePage(self):
+        book = self.mgr.GetPane("book").window
+        
+        image = wx.ArtProvider.GetBitmap(wx.ART_HELP_BOOK, wx.ART_OTHER, wx.Size(16, 16))
+        htmlctrl = wx.html.HtmlWindow(book)
+        htmlctrl.SetPage(GetIntroText())
+        book.AddPage(htmlctrl, "Welcome page", False, image)
+
+    def AddSymbolPage(self, data, bitmap = wx.NullBitmap):
+        book = self.mgr.GetPane("book").window
+
+        panel = SymbolPanel(book, data.session, data.symbol, self.log)
+        caption = "Symbol #{}".format(data.symbol.symIndexId)
+        book.AddPage(panel, caption, True, bitmap)
+        self.sessionPages.append(panel)
+
     def MakeSymbolTreePane(self):
         paneinfo = aui.AuiPaneInfo().Name("symboltree").Caption("Symbol Tree")
         paneinfo.Bottom().CloseButton(False).MaximizeButton(True).MinimizeButton(True).Hide()
         
-        imglist = wx.ImageList(16, 16, initialCount = 3)
+        imglist = wx.ImageList(16, 16, initialCount = 4)
         imglist.Add(wx.ArtProvider.GetBitmap(wx.ART_EXECUTABLE_FILE, wx.ART_OTHER, wx.Size(16, 16)))
+        imglist.Add(wx.ArtProvider.GetBitmap(wx.ART_NORMAL_FILE, wx.ART_OTHER, wx.Size(16, 16)))
         imglist.Add(wx.ArtProvider.GetBitmap(wx.ART_NORMAL_FILE, wx.ART_OTHER, wx.Size(16, 16)))
         imglist.Add(wx.ArtProvider.GetBitmap(wx.ART_FIND, wx.ART_OTHER, wx.Size(16, 16)))
         self.TREE_ART_ROOT_SYMBOL       = 0 # root symbol, SymTagExe
         self.TREE_ART_ATTRIBUTE_SYMBOL  = 1 # attribute symbol
-        self.TREE_ART_CHILD_SYMBOL      = 1 # child symbol
-        self.TREE_ART_SEARCH_FILTER     = 2 # search filter
+        self.TREE_ART_CHILD_SYMBOL      = 2 # child symbol
+        self.TREE_ART_SEARCH_FILTER     = 3 # search filter
 
         tree = wx.TreeCtrl(self)
         tree.AssignImageList(imglist)
@@ -191,51 +284,66 @@ class PyDiaGUI(wx.Frame):
         wx.EVT_MENU(self, wx.ID_CLOSE, self.OnClose)
         wx.EVT_MENU(self, wx.ID_EXIT, self.OnExit)
         wx.EVT_MENU(self, wx.ID_ABOUT, self.OnAbout)
+        wx.EVT_MENU(self, wx.ID_HELP, self.OnHelp)
+
+        self.Bind(aui.EVT_AUINOTEBOOK_PAGE_CLOSE, self.OnNotebookPageClose)
+        
+        tree = self.mgr.GetPane("symboltree").window
+        self.Bind(wx.EVT_TREE_ITEM_EXPANDING, self.OnTreeItemExpanding, tree)
+        self.Bind(wx.EVT_TREE_ITEM_ACTIVATED, self.OnTreeItemActivate, tree)
 
     def OpenSession(self, path):
         session = pydia.PyDia(path)
         self.CloseSession()
         self.session = session
 
-        symbol = self.session.globalScope
-        symIndexId = symbol.symIndexId
-
-        paneinfo = aui.AuiPaneInfo().Name("symbol_{}".format(symIndexId)).Caption("Symbol #{}".format(symIndexId))
-        paneinfo.Center().CloseButton(True).MaximizeButton(True).MinimizeButton(True).Show()
-        pane = PyDiaSymbolPanel(self, session, symbol, self.log)
-        self.mgr.AddPane(pane, paneinfo)
-
         tree = self.mgr.GetPane("symboltree").Show().window
-        root = tree.AddRoot("{} - {}".format(symIndexId, path), self.TREE_ART_ROOT_SYMBOL)
-        tree.SetPyData(root, pane)
+        symbol = self.session.globalScope
+        title = "{} - {}".format(symbol.symIndexId, path)
+        image = self.TREE_ART_ROOT_SYMBOL
+        data = SymbolData(session, symbol)
+        root = tree.AddRoot(title, image)
+        tree.SetPyData(root, data)
         tree.SetItemHasChildren(root, True)
 
-        self.mgr.Update()
         self.GetMenuBar().FindItemById(wx.ID_CLOSE).Enable(True)
+        self.AddSymbolPage(data, tree.GetImageList().GetBitmap(image))
+        self.DoUpdate()
 
     def CloseSession(self):
         del self.session
         self.session = None
         
-        tree = self.mgr.GetPane("symboltree").Hide().window
+        book = self.mgr.GetPane("book").window
+        for page in self.sessionPages:
+            book.DeletePage(book.GetPageIndex(page))
+        del self.sessionPages[:]
 
-        def removePanes(self, tree, item):
-            if not item.IsOk():
-                return
-            pane = tree.GetPyData(item)
-            if pane:
-                pane.Hide()
-                self.mgr.DetachPane(pane)
-                self.RemoveChild(pane)
-            item, cookie = tree.GetFirstChild(item)
-            while item.IsOk():
-                removePanes(self, tree, item)
-                item = tree.GetNextChild(item, cookie)
-        removePanes(self, tree, tree.GetRootItem())
+        tree = self.mgr.GetPane("symboltree").Hide().window
         tree.DeleteAllItems()
             
-        self.mgr.Update()
         self.GetMenuBar().FindItemById(wx.ID_CLOSE).Enable(False)
+
+    def ShowExceptionInDialog(self):
+        desc = traceback.format_exc()
+        dlg = wx.MessageDialog(self, desc, 'Error:', wx.OK | wx.ICON_ERROR)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+
+def GetIntroText():
+    text = \
+    "<html><body>" \
+    "<h3>Welcome to PyDiaGUI</h3>" \
+    "<p>PyDiaGUI is a graphical user interface to PyDia, a collection of classes to explore debug symbols from MSDIA in python.<p>" \
+    "<p>MSDIA is the Microsoft Debug Interface Access Software Development Kit (DIA SDK) that comes with Visual Studio.<p>" \
+    "<ul><li>http://msdn.microsoft.com/en-us/library/x93ctkx8.aspx</li></ul>" \
+    "<p>Please report any bugs or requests of improvements to:<p>" \
+    "<ul><li>https://github.com/flaviojs/pydia</li></ul>" \
+    "</body></html>"
+
+    return text
+
 
 def main():
     app = wx.PySimpleApp()
