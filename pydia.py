@@ -161,6 +161,14 @@ def CVCALL_str(value):
     if value == CVCALL.CV_CALL_THISCALL: return "__thiscall"
     return "CVCALL_str({})".format(value)
 
+NameSearchOptions = enum(
+    nsNone               = 0x0,
+    nsfCaseSensitive     = 0x1,
+    nsfCaseInsensitive   = 0x2,
+    nsfFNameExt          = 0x4,
+    nsfRegularExpression = 0x8,
+    nsfUndecoratedName   = 0x10)
+
 def hexValue(value,length):
     assert length > 0
     bits = length * 8
@@ -1972,26 +1980,20 @@ class PyDia:
     def symbolById(self, id):
         return self.session.symbolById(id)
 
-    def findChildrenEx(self, symbol=None):
+    def findChildrenEx(self, symbol = None, symTag = SYMTAG.SymTagNull, name = None, flags = 0):
         """Return an iterator for all the children."""
         if symbol == None:
             symbol = self.globalScope
-        children = symbol.findChildrenEx(SYMTAG.SymTagNull, None, 0)
+        children = symbol.findChildrenEx(symTag, name, flags)
         return DiaEnumSymbolsIterator(children)
 
     def findChildrenByTypeEx(self, symTag, symbol=None):
         """Return an iterator for all the children of the specified type."""
-        if symbol == None:
-            symbol = self.globalScope
-        children = symbol.findChildrenEx(symTag, None, 0)
-        return DiaEnumSymbolsIterator(children)
+        return self.findChildrenEx(symbol = symbol, symTag = symTag)
 
-    def findChildrenByNameEx(self, name, symTag=SYMTAG.SymTagNull, symbol=None):
+    def findChildrenByNameEx(self, name, symTag = SYMTAG.SymTagNull, symbol = None):
         """Return an iterator for all the children of the specified type."""
-        if symbol == None:
-            symbol = self.globalScope
-        children = symbol.findChildrenEx(symTag, name, 0)
-        return DiaEnumSymbolsIterator(children)
+        return self.findChildrenEx(name = name, symTag = symTag, symbol = symbol)
 
     def printSession(self):
         context = "IDiaSession.getEnumTables"
