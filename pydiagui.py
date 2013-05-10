@@ -32,10 +32,15 @@ class TreeData(object):
 
 
 class FindChildrenData(TreeData):
+
+    DEFAULT_NAME = ""
+    DEFAULT_TYPE = pydia.SYMTAG.SymTagNull
+    DEFAULT_FLAGS = pydia.NameSearchOptions.nsNone
+    
     def __init__(self):
-        self.name = ""
-        self.type = pydia.SYMTAG.SymTagNull
-        self.flags = pydia.NameSearchOptions.nsNone
+        self.name = self.DEFAULT_NAME
+        self.type = self.DEFAULT_TYPE
+        self.flags = self.DEFAULT_FLAGS
         self.busy = False
 
     def GetTreeDataType(self):
@@ -113,8 +118,9 @@ class FindChildrenDialog(wx.Dialog):
 
             # type
             value = pydia.SYMTAG_name(data.type)
-            choices = [k for k in pydia.SYMTAG.__dict__.keys() if k.startswith("SymTag")]
+            choices = sorted([k for k in pydia.SYMTAG.__dict__.keys() if k.startswith("SymTag")])
             assert value in choices
+            assert pydia.SYMTAG_name(FindChildrenData.DEFAULT_TYPE) in choices
             
             box = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -155,13 +161,27 @@ class FindChildrenDialog(wx.Dialog):
             btnsizer.AddButton(btn)
             btnsizer.Realize()
 
-            sizer.Add(btnsizer, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+            btnsizer2 = wx.BoxSizer(wx.HORIZONTAL)
+            btn = wx.Button(self, wx.ID_DEFAULT, label = "Default values")
+            btn.Bind(wx.EVT_BUTTON, self.OnDefaultButton)
+
+            btnsizer2.Add(btnsizer)
+            btnsizer2.Add(btn, 0, wx.LEFT, 10)
+
+            sizer.Add(btnsizer2, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
             self.SetSizer(sizer)
             sizer.Fit(self)
         except:
             traceback.print_exc()
             self.Destroy()
+
+    def OnDefaultButton(self, event):
+        self.name.SetValue(FindChildrenData.DEFAULT_NAME)
+        self.type.SetValue(pydia.SYMTAG_name(FindChildrenData.DEFAULT_TYPE))
+        for flagname in self.flags.keys():
+            flag = getattr(pydia.NameSearchOptions, flagname)
+            self.flags[flagname].SetValue((flag& FindChildrenData.DEFAULT_FLAGS) == flag)
 
     def GetName(self):
         return self.name.GetValue()
@@ -188,19 +208,42 @@ class SymbolPanel(wx.Panel):
 
             sizer = wx.BoxSizer(wx.VERTICAL)
 
-            # flags
+            # metadata
             static = wx.StaticBox(self, label = "Metadata :")
+            static.SetMinSize(wx.Size(-1, 100))
 
             box = wx.StaticBoxSizer(static, wx.VERTICAL)
 
             metadata = pydia.SymbolPrinter(session).metadata(symbol)
-            self.text = wx.TextCtrl(self, -1, value = '\n'.join(metadata), style = wx.TE_MULTILINE | wx.TE_READONLY)
-            box.Add(self.text, 0, wx.EXPAND)
+            self.metactrl = wx.TextCtrl(self, -1, value = '\n'.join(metadata), style = wx.TE_MULTILINE | wx.TE_READONLY)
+            box.Add(self.metactrl, 1, wx.EXPAND)
             
             sizer.Add(box, 0, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+            # attributes
+            self.listctrl = wx.ListCtrl(self, style = wx.LC_REPORT | wx.LC_SORT_ASCENDING)
+            self.listctrl.SetMinSize(wx.Size(-1, 150))
+            self.listctrl.InsertColumn(0, "Attribute")
+            self.listctrl.InsertColumn(1, "Value")
+
+            self.data = dict()
+            for attribute in sorted(pydia.SymbolPrinter(session).attributes(symbol)):
+                try:
+                    self.data[attribute] = str(getattr(symbol, attribute))
+                except Exception as e:
+                    self.data[attribute] = str(e)
+            for attribute in self.data.keys():
+                value = self.data[attribute]
+                index = self.listctrl.InsertStringItem(sys.maxint, attribute)
+                self.listctrl.SetStringItem(index, 1, value)
+            self.listctrl.SetColumnWidth(0, wx.LIST_AUTOSIZE)
+            self.listctrl.SetColumnWidth(1, wx.LIST_AUTOSIZE)
             
+            sizer.Add(self.listctrl, 0, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
             self.SetSizer(sizer)
             sizer.Fit(self)
+            self.Layout()
         except:
             traceback.print_exc()
 
@@ -305,10 +348,11 @@ class PyDiaGUI(wx.Frame):
         book = self.mgr.GetPane("book").window
         page = book.GetPage(event.selection)
         try:
-            self.sessionPages.remove(pane)
-            pane.Hide()
+            self.sessionPages.remove(page)
+            page.Hide()
             self.DoUpdate()
         except:
+            #traceback.print_exc()
             pass
 
     def OnTreeItemExpanding(self, event):
@@ -516,23 +560,24 @@ class PyDiaGUI(wx.Frame):
         data = tree.GetPyData(item)
 
         # attribute symbols
-        for attribute in pydia.SymbolPrinter(data.session).attributes(data.symbol):
+        for attr in pydia.SymbolPrinter(data.session).attributes(data.symbol):
             try:
-                symbol = getattr(data.symbol, attribute)
-                if symbol and type(symbol) == type(data.symbol):
+                value = getattr(data.symbol, attr)
+                if value and value.__class__ is data.symbol.__class__:
                     image = self.TREE_ART_ATTRIBUTE_SYMBOL
-                    data = SymbolData(data.session, symbol)
-                    childitem = tree.AppendItem(item, data.GetTitle(attribute = attribute), image)
-                    tree.SetPyData(childitem, data)
+                    childdata = SymbolData(data.session, value)
+                    childitem = tree.AppendItem(item, childdata.GetTitle(attribute = attr), image)
+                    tree.SetPyData(childitem, childdata)
                     tree.SetItemHasChildren(childitem, True)
             except:
+                #traceback.print_exc()
                 pass
 
         # search filter
         image = self.TREE_ART_SEARCH_FILTER
-        data = FindChildrenData()
-        finditem = tree.AppendItem(item, data.GetTitle(), image)
-        tree.SetPyData(finditem, data)
+        finddata = FindChildrenData()
+        finditem = tree.AppendItem(item, finddata.GetTitle(), image)
+        tree.SetPyData(finditem, finddata)
         tree.SetItemHasChildren(finditem, True)
 
 #---------------------------------------------------------------------------
