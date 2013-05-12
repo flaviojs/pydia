@@ -1,4 +1,4 @@
-
+# -*- coding: utf-8 -*-
 
 import sys, os, traceback, thread
 import wx
@@ -330,7 +330,7 @@ class PyDiaGUI(wx.Frame):
         msg = ["Read the welcome page for more info.\n",
                "\n",
                "Author:\n",
-               "  Fl·vio J. Saraiva <flaviojs2005@gmail.com>\n",
+               u"  Fl√°vio J. Saraiva <flaviojs2005@gmail.com>\n",
                "\n"
                "Please report any bugs or requests of improvements to:\n",
                "  https://github.com/flaviojs/pydia\n",
