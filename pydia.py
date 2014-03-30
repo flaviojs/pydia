@@ -970,6 +970,7 @@ class UdtPrinter(SymbolPrinter):
         nestedTypes = [] # SymTagEnum, SymTagUDT, SymTagTypedef
         variables = [] # SymTagData
         functions = [] # SymTagFunction
+        ignored = []
         # gather symbols
         children = DiaEnumSymbolsIterator(symbol.findChildrenEx(SYMTAG.SymTagNull, None, 0))
         DEBUG("UdtPrinter.defineLines", "len(children)={}".format(len(children)))
@@ -977,6 +978,9 @@ class UdtPrinter(SymbolPrinter):
             childSymTag = child.symTag
             if childSymTag == SYMTAG.SymTagBaseClass:
                 baseClasses.append(child)
+            elif child.classParentId != symbol.symIndexId:
+                # ignore children that belong to other udts (keeps baseclasses)
+                ignored.append(child)
             elif childSymTag == SYMTAG.SymTagVTable:
                 vtables.append(child)
             elif childSymTag in (SYMTAG.SymTagEnum, SYMTAG.SymTagUDT, SYMTAG.SymTagTypedef):
@@ -997,6 +1001,10 @@ class UdtPrinter(SymbolPrinter):
         # nested types (vtable, enum, udt, typedef)
         if symbol.udtKind == UDTKIND.UdtClass:
             lines.append("public:") # class is not public by default
+        if ignored:
+            lines.append("\t// XXX child symbols with a different classParent were ignored (part of baseclass?)")
+            lines += ["\t// " + " ".join(SymbolPrinter(self).metadata(s)) for s in ignored]
+            lines.append("")
         for child in vtables + nestedTypes:
             childSymTag = child.symTag
             if childSymTag == SYMTAG.SymTagEnum:
@@ -1004,6 +1012,9 @@ class UdtPrinter(SymbolPrinter):
             elif childSymTag == SYMTAG.SymTagVTable:
                 lines += ["\t" + line for line in VTablePrinter(self).defineLines(child)]
             elif childSymTag == SYMTAG.SymTagUDT:
+                if child.symIndexId == symbol.symIndexId:
+                    lines.append("\t// TODO child.symIndexId == symbol.symIndexId // " + " ".join(SymbolPrinter(self).metadata(child)))
+                    continue
                 lines += ["\t" + line for line in UdtPrinter(self).defineLines(child)]
             elif childSymTag == SYMTAG.SymTagTypedef:
                 lines.append("\ttypedef {}; // {} // {}".format(
